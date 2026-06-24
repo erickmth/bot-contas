@@ -576,5 +576,6 @@ start_app()
 # ==================== PONTO DE ENTRADA ====================
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    # O Render usa a variável PORT, mas o gunicorn também pode configurar
+    port = int(os.environ.get('PORT', 10000))  # Mudei de 5000 para 10000
     app.run(debug=False, host='0.0.0.0', port=port)
