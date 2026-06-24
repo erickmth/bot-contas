@@ -8,26 +8,15 @@ pip install --upgrade pip
 # Instalar dependências Python
 pip install -r requirements.txt
 
-# Instalar Chrome e ChromeDriver
-echo "📦 Instalando Chrome..."
-apt-get update
-apt-get install -y wget gnupg unzip
+# Instalar Chrome e ChromeDriver (versão para Render)
+echo "📦 Instalando Chrome e ChromeDriver..."
 
-# Instalar Chrome
-wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
-echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
-apt-get update
-apt-get install -y google-chrome-stable
+# Baixar e instalar Chrome diretamente
+wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+dpkg -i /tmp/chrome.deb || apt-get -f install -y
+rm /tmp/chrome.deb
 
-# Instalar ChromeDriver
-echo "📦 Instalando ChromeDriver..."
-CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
-CHROME_MAJOR_VERSION=${CHROME_VERSION%.*.*}
-wget "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_MAJOR_VERSION" -O chromedriver_version
-CHROMEDRIVER_VERSION=$(cat chromedriver_version)
-wget "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
-unzip chromedriver_linux64.zip
-mv chromedriver /usr/local/bin/
-chmod +x /usr/local/bin/chromedriver
+# Instalar ChromeDriver via webdriver-manager (já está no requirements)
+echo "✅ Chrome e ChromeDriver instalados via webdriver-manager"
 
 echo "✅ Build concluído com sucesso!"
