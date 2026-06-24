@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: sistema-lembretes
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 120 --workers 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.25
+      - key: RENDER
+        value: true
+    plan: starter
