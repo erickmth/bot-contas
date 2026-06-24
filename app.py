@@ -7,11 +7,9 @@ import threading
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
-import requests
 import qrcode
 import base64
 import tempfile
-import atexit
 
 # Configuração de logging
 logging.basicConfig(
@@ -26,17 +24,11 @@ CORS(app)
 # Configurações
 DATA_FILE = 'gastos.json'
 WHATSAPP_SESSION = 'whatsapp_session.json'
-TARGET_PHONE = '41998239031'
-
-# Inicializar WhatsApp
-whatsapp_initialized = False
+TARGET_PHONE = '41998239031'  # Número que receberá os lembretes
 
 # Dados em memória
 gastos = []
 scheduler = None
-
-# Flag para controlar se estamos no Render
-IS_RENDER = os.environ.get('RENDER', False)
 
 def load_gastos():
     """Carrega os gastos do arquivo JSON"""
@@ -60,18 +52,6 @@ def save_gastos():
         logger.info(f"Salvos {len(gastos)} gastos")
     except Exception as e:
         logger.error(f"Erro ao salvar gastos: {e}")
-
-def format_br_date(date_str):
-    """Formata data no padrão brasileiro"""
-    try:
-        if '/' in date_str:
-            day, month, year = date_str.split('/')
-            if len(year) == 2:
-                year = f'20{year}'
-            return f"{day}/{month}/{year}"
-        return date_str
-    except:
-        return date_str
 
 def parse_date(date_str):
     """Converte data string para objeto datetime"""
@@ -97,21 +77,20 @@ def calculate_days_until(date_str):
         pass
     return None
 
-def send_whatsapp_message_web(message):
-    """Envia mensagem via WhatsApp Web usando a interface web"""
+def send_whatsapp_message(message):
+    """Envia mensagem via WhatsApp Web usando Selenium"""
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
         import time
         
         logger.info("Enviando mensagem via WhatsApp Web...")
         
         chrome_options = Options()
-        
-        # Configurações para ambiente sem interface gráfica
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
@@ -121,14 +100,12 @@ def send_whatsapp_message_web(message):
         chrome_options.add_experimental_option('excludeSwitches', ['enable-automation'])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
-        # Iniciar driver
         driver = webdriver.Chrome(options=chrome_options)
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
-        # Acessar WhatsApp Web
         driver.get('https://web.whatsapp.com')
         
-        # Tentar carregar sessão
+        # Carregar sessão se existir
         if os.path.exists('whatsapp_session.json'):
             try:
                 with open('whatsapp_session.json', 'r') as f:
@@ -137,22 +114,20 @@ def send_whatsapp_message_web(message):
                     driver.add_cookie(cookie)
                 driver.refresh()
             except:
-                logger.warning("Erro ao carregar sessão, continuando...")
+                pass
         
         # Aguardar carregar
-        wait = WebDriverWait(driver, 60)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='chat-list']")))
+        WebDriverWait(driver, 60).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='chat-list']"))
+        )
         
-        # Abrir chat com o número
+        # Abrir chat
         phone = TARGET_PHONE
         if not phone.startswith('55'):
             phone = f'55{phone}'
-        
-        # Limpar número para URL
         phone_clean = ''.join(filter(str.isdigit, phone))
         driver.get(f'https://web.whatsapp.com/send?phone={phone_clean}')
         
-        # Aguardar carregar
         time.sleep(3)
         
         # Encontrar campo de mensagem
@@ -160,13 +135,12 @@ def send_whatsapp_message_web(message):
             EC.presence_of_element_located((By.CSS_SELECTOR, "div[contenteditable='true']"))
         )
         
-        # Digitar mensagem
         input_box.click()
         input_box.clear()
         input_box.send_keys(message)
         time.sleep(1)
         
-        # Clicar no botão enviar
+        # Enviar
         send_button = driver.find_element(By.CSS_SELECTOR, "button[data-testid='compose-btn-send']")
         send_button.click()
         
@@ -192,9 +166,7 @@ def check_payments():
     global gastos
     
     try:
-        today = datetime.datetime.now().date()
         logger.info("Verificando vencimentos...")
-        
         messages_sent = 0
         
         for gasto in gastos:
@@ -219,10 +191,10 @@ def check_payments():
             
             if message:
                 logger.info(f"Enviando lembrete: {message}")
-                success = send_whatsapp_message_web(message)
+                success = send_whatsapp_message(message)
                 if success:
                     messages_sent += 1
-                time.sleep(3)  # Pausa entre mensagens
+                time.sleep(3)
         
         logger.info(f"Total de mensagens enviadas: {messages_sent}")
             
@@ -234,7 +206,7 @@ def scheduled_job():
     logger.info("Executando job agendado das 08:00")
     check_payments()
 
-# Rotas da API
+# ==================== ROTAS DA API ====================
 
 @app.route('/')
 def index():
@@ -259,13 +231,11 @@ def sync_gastos():
         
         novos_gastos = data.get('gastos', [])
         
-        # Converter dados
         for gasto in novos_gastos:
             if not gasto.get('id'):
                 gasto['id'] = str(int(time.time() * 1000)) + str(len(gastos))
             gasto['pago'] = gasto.get('pago', False)
         
-        # Atualizar gastos existentes ou adicionar novos
         for novo_gasto in novos_gastos:
             exists = False
             for i, gasto in enumerate(gastos):
@@ -330,6 +300,7 @@ def connect_whatsapp():
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
         import time
+        import io
         
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -340,10 +311,8 @@ def connect_whatsapp():
         driver = webdriver.Chrome(options=chrome_options)
         driver.get('https://web.whatsapp.com')
         
-        # Aguardar QR Code carregar
         time.sleep(5)
         
-        # Capturar QR Code
         qr_element = WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='qrcode']"))
         )
@@ -354,8 +323,6 @@ def connect_whatsapp():
             qr.add_data(qr_data)
             qr.make(fit=True)
             
-            # Converter para base64
-            import io
             img = qr.make_image(fill_color="black", back_color="white")
             buffered = io.BytesIO()
             img.save(buffered, format="PNG")
@@ -372,20 +339,6 @@ def connect_whatsapp():
         
     except Exception as e:
         logger.error(f"Erro ao conectar WhatsApp: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/whatsapp/test', methods=['POST'])
-def test_whatsapp():
-    """Testa envio de mensagem"""
-    try:
-        data = request.json
-        message = data.get('message', 'Teste de mensagem do sistema')
-        success = send_whatsapp_message_web(message)
-        return jsonify({
-            'success': success,
-            'message': 'Mensagem enviada' if success else 'Erro ao enviar'
-        })
-    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 def init_scheduler():
@@ -406,18 +359,6 @@ def start_app():
     logger.info("Iniciando aplicação...")
     load_gastos()
     init_scheduler()
-    
-    # Verificar vencimentos na inicialização (apenas se não estiver no Render ou em modo de desenvolvimento)
-    if not IS_RENDER:
-        logger.info("Executando verificação inicial...")
-        # Aguardar um pouco para garantir que tudo está pronto
-        time.sleep(2)
-        # Executar em uma thread separada para não bloquear
-        thread = threading.Thread(target=check_payments)
-        thread.daemon = True
-        thread.start()
-    else:
-        logger.info("Pulando verificação inicial no Render - será feita às 08:00")
 
 # Iniciar aplicação
 if __name__ == '__main__':
